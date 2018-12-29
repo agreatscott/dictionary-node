@@ -1,12 +1,9 @@
+const dotenv = require('dotenv').config()
 const http = require('http');
 const assert = require('assert');
 
 const cheerio = require('cheerio');
 const request = require('request');
-
-// const MongoClient = require('mongodb').MongoClient;
-const mongoUrl = 'mongodb://localhost:27017';
-const dbname = 'dictionarydb'
 
 const hostname = '127.0.0.1';
 const port = 3000; 
@@ -16,11 +13,11 @@ const port = 3000;
 const mysql = require('mysql');
 
 const searchTermQuery = 'SELECT term, term_definition, datetime_defined FROM word_definitions WHERE term = \'';
-var con = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    //password: 
-    database: 'dictionarydb'
+var con = mysql.createConnection({ // requires dotenv configuration
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME
 });
 
 
