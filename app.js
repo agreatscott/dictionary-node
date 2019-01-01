@@ -18,10 +18,8 @@ const REQUEST_HEADERS = {
 
 /* response values */
 const STATUS_CODES = { OK: 200, SERVER_ERROR: 500 };
-const RESPONSE_HEADERS = [{
-    name: 'Content-Type',
-    value: 'application/json'
-}];
+const RH_NEW_DEF = {'Content-Type' : 'application/json', 'Definition-Source' : 'new'};
+const RH_STORED_DEF = {'Content-Type' : 'application/json', 'Definition-Source' : 'stored'}
 
 /* database queries */
 const QUERY_SEARCH_TERM = 'SELECT word, def, insertion_date FROM word_definitions WHERE word = ?';
@@ -46,10 +44,9 @@ const server = http.createServer((req, res) => {
             res.end();
             return;
         }
-        if (term == 'favicon.ico') return;
+        if (term == 'favicon.ico') return res.end();
 
         if (result.length == 0) { /* term definition not found in db */
-            console.log(term + ' not in database, looking up definition...');
             request({
                 method: REQUEST_METHOD,
                 url: REQUEST_URL + term,
@@ -61,11 +58,8 @@ const server = http.createServer((req, res) => {
                     return;
                 }
 
-                console.log('google definition request for ' + term + ' received!');
-
                 /* scrape term definition from web page */
                 let googleDef = scrapeDefinitions(body);
-                console.log(googleDef);
 
                 /* Create JSON and insert new definition into db */
                 let googleDefJson = JSON.stringify({
@@ -74,28 +68,15 @@ const server = http.createServer((req, res) => {
                 insertDef(con, term, googleDefJson);
 
                 /* return definition */
-                res.statusCode = STATUS_CODES.OK;
-                RESPONSE_HEADERS.forEach(headerObj => {
-                    res.setHeader(headerObj.name, headerObj.value);
-                });
-                
+                res.writeHead(STATUS_CODES.OK, RH_NEW_DEF);
                 res.write(googleDefJson);
-                console.log(' *********** END OF REQUEST ***************\n');
                 res.end();
             });
         }
         else { /* term definition found in db */
-            console.log(term + ' found in database!');
-
             /* return definition */
-            res.statusCode = STATUS_CODES.OK;
-            RESPONSE_HEADERS.forEach(headerObj => {
-                res.setHeader(headerObj.name, headerObj.value);
-            });
-            console.log(result[0].def);
-            // let googleDefJson = JSON.parse(result[0].def);
+            res.writeHead(STATUS_CODES.OK, RH_STORED_DEF);
             res.write(result[0].def);
-            console.log(' *********** END OF REQUEST ***************\n');
             res.end();
         }
     });
@@ -123,7 +104,6 @@ function parseGoogleDefinition(fullGoogleDefinition) {
     let parsedDefArr = [];
     let firstNumericDefIndex = fullGoogleDefinition.indexOf('1.');
     if (firstNumericDefIndex > 5 || firstNumericDefIndex < 0) { //there aren't multiple definitions
-        console.log('single definition');
         //take everything up to 'synonyms'
         let endPointIndex = fullGoogleDefinition.indexOf('synonym');
         if (endPointIndex != -1) {
@@ -131,18 +111,14 @@ function parseGoogleDefinition(fullGoogleDefinition) {
         }
     }
     else { //the text starts with 1 - there are multiple definitions to look for.
-        console.log('multiple definitions');
         let definitionNumber = 1;
         while (fullGoogleDefinition.indexOf(definitionNumber.toString() + '.') != -1) {
-            console.log(definitionNumber);
             let currentDefinitionStartIndex = fullGoogleDefinition.indexOf(definitionNumber.toString() + '.');
-            console.log("start " + currentDefinitionStartIndex);
 
             fullGoogleDefinition = fullGoogleDefinition.slice(currentDefinitionStartIndex); //cut off any extra at front of string
             fullGoogleDefinition = trimDefinition(fullGoogleDefinition); //also trim the starter thingy
 
             let currentDefinitionEndIndex = findCurrentDefinitionEndIndex(fullGoogleDefinition);
-            console.log('end ' + currentDefinitionEndIndex);
             let currentDefinition = fullGoogleDefinition.slice(0, currentDefinitionEndIndex); //extract current definition
 
             currentDefinition = checkSentenceFormatting(currentDefinition);
@@ -151,8 +127,6 @@ function parseGoogleDefinition(fullGoogleDefinition) {
             fullGoogleDefinition = fullGoogleDefinition.slice(currentDefinitionEndIndex); //cut off current definition just added to array.
             definitionNumber++;
         }
-
-        console.log('\n');
     }
     return parsedDefArr;
 }
@@ -160,7 +134,6 @@ function parseGoogleDefinition(fullGoogleDefinition) {
 function insertDef(con, word, definition) {
     con.query(QUERY_ADD_DEFINITION, [word, definition], function (err, result) {
         if (err) console.log("definition insert error! " + word);
-        else console.log("successfully added one new definition for " + word);
     });
 }
 
@@ -171,11 +144,8 @@ function findCurrentDefinitionEndIndex(fullDefinition) {
     //return the lowest index of all the possible ends, that's greater than -1.
     let currentDefEndIndex = -1;
     possibleEnds.forEach(possibleEnd => {
-        console.log('possible end ' + possibleEnd);
         let possibleEndIndex = fullDefinition.indexOf(possibleEnd)
-        console.log('possible end index: ' + possibleEndIndex);
         if (currentDefEndIndex == -1 || (possibleEndIndex < currentDefEndIndex && possibleEndIndex > -1)) {
-            console.log('new current definition end');
             currentDefEndIndex = possibleEndIndex;
         }
     });
