@@ -7,7 +7,7 @@ const mysql = require('mysql');
 
 /* server values */
 const HOSTNAME = '127.0.0.1';
-const PORT = 3000; 
+const PORT = 3000;
 
 /* request values */
 const REQUEST_METHOD = 'GET';
@@ -17,16 +17,17 @@ const REQUEST_HEADERS = {
 }
 
 /* response values */
-const STATUS_CODES = { OK: 200 };
+const STATUS_CODES = { OK: 200, SERVER_ERROR: 500 };
 const RESPONSE_HEADERS = [{
     name: 'Content-Type',
     value: 'application/json'
 }];
 
-/* database values */
-const QUERY_SEARCH_TERM = 'SELECT term, term_definition, datetime_defined FROM word_definitions WHERE term = \'';
-const QUERY_ADD_DEFINITION = 'INSERT INTO word_definitions (term, term_definition) VALUES (\'';
+/* database queries */
+const QUERY_SEARCH_TERM = 'SELECT word, def, insertion_date FROM word_definitions WHERE word = ?';
+const QUERY_ADD_DEFINITION = "INSERT INTO word_definitions (word, def) VALUES (?, ?)";
 
+/* database connection */
 const con = mysql.createConnection({ // requires dotenv configuration
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -34,15 +35,20 @@ const con = mysql.createConnection({ // requires dotenv configuration
     database: process.env.DB_NAME
 });
 
-
 const server = http.createServer((req, res) => {
 
     let term = req.url.slice(1).trim();
-    con.query(generateDefinitionSearchQuery(term), function (error, result, fields) {
-        if (error) throw error;
+
+    /* lookup term in db */
+    con.query(QUERY_SEARCH_TERM, [term], function (error, result, fields) {
+        if (error) {
+            setServerError(res, 'Error during database lookup');
+            res.end();
+            return;
+        }
         if (term == 'favicon.ico') return;
 
-        if (result.length == 0) { //if we don't have def, go get it. 
+        if (result.length == 0) { /* term definition not found in db */
             console.log(term + ' not in database, looking up definition...');
             request({
                 method: REQUEST_METHOD,
@@ -50,42 +56,49 @@ const server = http.createServer((req, res) => {
                 headers: REQUEST_HEADERS
             }, function (err, response, body) {
                 if (err) {
-                    return console.error(err);
+                    setServerError(res, 'Error retrieving definition from web');
+                    res.end();
+                    return;
                 }
+
                 console.log('google definition request for ' + term + ' received!');
 
-                let $ = cheerio.load(body);
+                /* scrape term definition from web page */
+                let googleDef = scrapeDefinitions(body);
+                console.log(googleDef);
 
-                // var a = $(".vmod").text();
-                let a = $("#ires").find('ol').text();
-                let googledef = parseGoogleDefinition(a);
+                /* Create JSON and insert new definition into db */
+                let googleDefJson = JSON.stringify({
+                    definitions: googleDef
+                });
+                insertDef(con, term, googleDefJson);
 
-                //insertDef(con, term, googledef);
-                console.log(googledef);
+                /* return definition */
                 res.statusCode = STATUS_CODES.OK;
                 RESPONSE_HEADERS.forEach(headerObj => {
                     res.setHeader(headerObj.name, headerObj.value);
                 });
-                let json = JSON.stringify({
-                    definitions: googledef
-                });
-                res.end(json);
+                
+                res.write(googleDefJson);
                 console.log(' *********** END OF REQUEST ***************\n');
+                res.end();
             });
         }
-        else {
+        else { /* term definition found in db */
             console.log(term + ' found in database!');
+
+            /* return definition */
             res.statusCode = STATUS_CODES.OK;
-            res.setHeader('Content-Type', 'text/plain');
-
-            res.end(result[0].term_definition);
+            RESPONSE_HEADERS.forEach(headerObj => {
+                res.setHeader(headerObj.name, headerObj.value);
+            });
+            console.log(result[0].def);
+            // let googleDefJson = JSON.parse(result[0].def);
+            res.write(result[0].def);
             console.log(' *********** END OF REQUEST ***************\n');
-
+            res.end();
         }
     });
-
-
-
 
 
 });
@@ -94,6 +107,17 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, HOSTNAME, () => {
     console.log(`Server running at http://${HOSTNAME}:${PORT}/`);
 });
+
+function setServerError(res, errorMessage) {
+    res.statusCode = STATUS_CODES.SERVER_ERROR;
+    res.statusMessage = errorMessage;
+}
+
+function scrapeDefinitions(body) {
+    let $ = cheerio.load(body);
+    let a = $("#ires").find('ol').text();
+    return parseGoogleDefinition(a);
+}
 
 function parseGoogleDefinition(fullGoogleDefinition) {
     let parsedDefArr = [];
@@ -128,23 +152,21 @@ function parseGoogleDefinition(fullGoogleDefinition) {
             definitionNumber++;
         }
 
-        console.log('\n\n\n');
+        console.log('\n');
     }
     return parsedDefArr;
 }
 
-const insertDef = function (con, word, definition) {
-    let completeQuery = QUERY_ADD_DEFINITION.concat(word).concat('\', \'').concat(definition).concat('\')')
-    console.log(completeQuery);
-    con.query(completeQuery, function (err, result) {
-        if (err) throw err;
-        console.log("successfully added one new definition for " + word);
+function insertDef(con, word, definition) {
+    con.query(QUERY_ADD_DEFINITION, [word, definition], function (err, result) {
+        if (err) console.log("definition insert error! " + word);
+        else console.log("successfully added one new definition for " + word);
     });
 }
 
 
 //helper functions
-const findCurrentDefinitionEndIndex = function (fullDefinition) {
+function findCurrentDefinitionEndIndex(fullDefinition) {
     const possibleEnds = ['synonym', '1. ', '2. ', '3. ', '4. ']; //TODO regex? 
     //return the lowest index of all the possible ends, that's greater than -1.
     let currentDefEndIndex = -1;
@@ -161,7 +183,7 @@ const findCurrentDefinitionEndIndex = function (fullDefinition) {
     return currentDefEndIndex;
 }
 
-const trimDefinition = function (fullDefinition) { //bastard of a function to strip certain values off the front of the definition
+function trimDefinition(fullDefinition) { //bastard of a function to strip certain values off the front of the definition
     const toTrim = ['1. ', '2. ', '3. ', '4. ', '5. ', 'informal'];
     toTrim.forEach(trimValue => {
         if (fullDefinition.slice(0, trimValue.length) == trimValue) fullDefinition = fullDefinition.slice(trimValue.length);
@@ -169,15 +191,11 @@ const trimDefinition = function (fullDefinition) { //bastard of a function to st
     return fullDefinition;
 }
 
-const checkSentenceFormatting = function (definition) {
+function checkSentenceFormatting(definition) {
     for (let i = 0; i < definition.length - 1; i++) {
         if (definition[i] == "." && definition[i + 1] != " ") {
-            definition = definition.slice(0, i+1) + " " + definition.slice(i+1);
+            definition = definition.slice(0, i + 1) + " " + definition.slice(i + 1);
         }
     }
     return definition;
-}
-
-const generateDefinitionSearchQuery = function (term) {
-    return QUERY_SEARCH_TERM.concat(term).concat('\'')
 }
